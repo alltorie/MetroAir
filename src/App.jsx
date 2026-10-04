@@ -3,6 +3,8 @@ import { MapContainer, TileLayer, Marker, useMap, CircleMarker, Popup } from 're
 import axios from 'axios';
 import L from 'leaflet';
 
+const API_URL = import.meta.env.VITE_API_URL;
+
 // Restricts map bounds strictly to Metro Manila
 const MetroManilaBounds = () => {
   const map = useMap();
