@@ -43,7 +43,7 @@ export default function App() {
   // 1. Fetch Map Data and Connect SSE
   useEffect(() => {
     const fetchAqiData = () => {
-      axios.get(`${API_URL}/api/map-aqi`);
+      axios.get(`${API_URL}/api/map-aqi`)
         .then(res => {
           if (Array.isArray(res.data)) setMapData(res.data);
         })
