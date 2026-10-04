@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const cors = require('cors');
 const EventEmitter = require('events');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -20,7 +21,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Station Schema
+// Station Schema (live snapshot, gets overwritten each fetch)
 const stationSchema = new mongoose.Schema({
   uid: Number,
   name: String,
@@ -36,6 +37,19 @@ const stationSchema = new mongoose.Schema({
 
 const Station = mongoose.model('Station', stationSchema);
 
+// AQI Log Schema (append-only history, one row per station per fetch)
+const aqiLogSchema = new mongoose.Schema({
+  uid: Number,
+  station: String,
+  aqi: String,
+  status: String,
+  lat: Number,
+  lng: Number,
+  loggedAt: { type: Date, default: Date.now }
+});
+
+const AqiLog = mongoose.model('AqiLog', aqiLogSchema);
+
 // 6-Tier AQI Classification
 function getAqiStatus(aqiValue) {
   const aqi = Number(aqiValue);
@@ -48,48 +62,83 @@ function getAqiStatus(aqiValue) {
   return { status: 'Hazardous', color: '#7e0023' };
 }
 
+// Shared fetch logic: pulls live stations from WAQI, classifies them,
+// triggers hazard alerts, and returns the mapped station list.
+async function fetchStations() {
+  const bounds = "14.35,120.85,14.80,121.15";
+  const boundsUrl = `https://api.waqi.info/v2/map/bounds/?latlng=${bounds}&token=${process.env.WAQI_TOKEN}`;
+
+  const boundsResponse = await axios.get(boundsUrl, { timeout: 8000 });
+  const activeStations = boundsResponse.data?.data || [];
+
+  return activeStations.map(station => {
+    const aqiData = getAqiStatus(station.aqi);
+
+    // Deduplicated Alert Trigger
+    if (Number(station.aqi) > 100) {
+      const stationName = station.station.name;
+      const prevAlert = alertedStations.get(stationName);
+      const now = Date.now();
+
+      if (!prevAlert || prevAlert.aqi !== station.aqi || (now - prevAlert.time > 10 * 60 * 1000)) {
+        alertedStations.set(stationName, { aqi: station.aqi, time: now });
+        aqiEmitter.emit('unhealthy-air', {
+          station: stationName,
+          aqi: station.aqi,
+          status: aqiData.status
+        });
+      }
+    }
+
+    return {
+      uid: station.uid,
+      name: station.station.name,
+      lat: station.lat,
+      lng: station.lon,
+      aqi: station.aqi,
+      pollutant: 'PM2.5',
+      status: aqiData.status,
+      color: aqiData.color
+    };
+  });
+}
+
+// Writes the current station readings into the append-only log collection.
+// Runs on a schedule (below) so history builds up even with nobody on the site.
+async function logAqiSnapshot() {
+  try {
+    const mapData = await fetchStations();
+
+    if (mapData.length > 0) {
+      const logs = mapData.map(s => ({
+        uid: s.uid,
+        station: s.name,
+        aqi: s.aqi,
+        status: s.status,
+        lat: s.lat,
+        lng: s.lng
+      }));
+      await AqiLog.insertMany(logs);
+
+      await Station.deleteMany({});
+      await Station.insertMany(mapData);
+
+      console.log(`Logged ${logs.length} readings at ${new Date().toISOString()}`);
+    }
+  } catch (error) {
+    console.error('Scheduled logging failed:', error.message);
+  }
+}
+
+// Runs every 30 minutes, independent of whether anyone is on the site
+cron.schedule('*/30 * * * *', logAqiSnapshot);
+
 // 1. STANDARD ENDPOINT: Fetches live map data within Metro Manila bounds
 app.get('/api/map-aqi', async (req, res) => {
   try {
-    const bounds = "14.35,120.85,14.80,121.15";
-    const boundsUrl = `https://api.waqi.info/v2/map/bounds/?latlng=${bounds}&token=${process.env.WAQI_TOKEN}`;
+    const mapData = await fetchStations();
 
-    const boundsResponse = await axios.get(boundsUrl, { timeout: 8000 });
-    const activeStations = boundsResponse.data?.data || [];
-
-    if (activeStations.length > 0) {
-      const mapData = activeStations.map(station => {
-        const aqiData = getAqiStatus(station.aqi);
-
-        // Deduplicated Alert Trigger
-        if (Number(station.aqi) > 100) {
-          const stationName = station.station.name;
-          const prevAlert = alertedStations.get(stationName);
-          const now = Date.now();
-
-          // Only emit if never alerted, AQI changed, or cooling period expired (10 mins)
-          if (!prevAlert || prevAlert.aqi !== station.aqi || (now - prevAlert.time > 10 * 60 * 1000)) {
-            alertedStations.set(stationName, { aqi: station.aqi, time: now });
-            aqiEmitter.emit('unhealthy-air', {
-              station: stationName,
-              aqi: station.aqi,
-              status: aqiData.status
-            });
-          }
-        }
-
-        return {
-          uid: station.uid,
-          name: station.station.name,
-          lat: station.lat,
-          lng: station.lon,
-          aqi: station.aqi,
-          pollutant: 'PM2.5',
-          status: aqiData.status,
-          color: aqiData.color
-        };
-      });
-
+    if (mapData.length > 0) {
       await Station.deleteMany({});
       await Station.insertMany(mapData);
       return res.json(mapData);
@@ -140,6 +189,30 @@ app.get('/api/station/:uid', async (req, res) => {
     res.json(response.data?.data || {});
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch station feed" });
+  }
+});
+
+// 5. HISTORY ENDPOINT: Returns logged readings for a given day (defaults to today)
+// Examples:
+//   /api/history                                  -> today, all stations
+//   /api/history?date=2026-10-03                  -> a specific day, all stations
+//   /api/history?station=EDSA%20Shaw%20Boulevard   -> today, one station
+app.get('/api/history', async (req, res) => {
+  try {
+    const date = req.query.date ? new Date(req.query.date) : new Date();
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    const filter = { loggedAt: { $gte: start, $lte: end } };
+    if (req.query.station) filter.station = req.query.station;
+
+    const logs = await AqiLog.find(filter).sort({ loggedAt: 1 });
+    res.json(logs);
+  } catch (error) {
+    console.error("History fetch error:", error.message);
+    res.status(500).json({ error: "Failed to fetch history" });
   }
 });
 
