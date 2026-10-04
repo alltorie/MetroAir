@@ -43,7 +43,7 @@ export default function App() {
   // 1. Fetch Map Data and Connect SSE
   useEffect(() => {
     const fetchAqiData = () => {
-      axios.get('http://localhost:5000/api/map-aqi')
+      axios.get(`${API_URL}/api/map-aqi`);
         .then(res => {
           if (Array.isArray(res.data)) setMapData(res.data);
         })
@@ -53,7 +53,7 @@ export default function App() {
     fetchAqiData();
     const intervalId = setInterval(fetchAqiData, 300000);
 
-    const eventSource = new EventSource('http://localhost:5000/api/events');
+    const eventSource = new EventSource(`${API_URL}/api/map-aqi`);
     eventSource.onmessage = (event) => {
       const newAlert = JSON.parse(event.data);
       const now = Date.now();
