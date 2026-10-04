@@ -55,7 +55,7 @@ export default function App() {
     fetchAqiData();
     const intervalId = setInterval(fetchAqiData, 300000);
 
-    const eventSource = new EventSource(`${API_URL}/api/map-aqi`);
+    const eventSource = new EventSource(`${API_URL}/api/events`);
     eventSource.onmessage = (event) => {
       const newAlert = JSON.parse(event.data);
       const now = Date.now();
@@ -151,7 +151,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentAlert]);
 
-  const triggerSimulation = () => axios.post('http://localhost:5000/api/simulate-alert');
+  const triggerSimulation = () => axios.post(`${API_URL}/api/simulate-alert`);
 
   // --- NEW: Simulates walking into a hazardous zone ---
   const triggerWalkSimulation = () => {
@@ -205,6 +205,26 @@ export default function App() {
       iconSize: [45, 30],
       iconAnchor: [22, 15]
     });
+  };
+
+  // Returns a plain-language health recommendation based on the station's AQI color band
+  const getHealthRecommendation = (color, aqi) => {
+    switch (color) {
+      case '#00e400':
+        return 'Air quality is good. Enjoy outdoor activities as usual.';
+      case '#ffde33':
+        return 'Air quality is acceptable. Unusually sensitive individuals should consider reducing prolonged outdoor exertion.';
+      case '#ff7e00':
+        return 'Sensitive groups (children, elderly, asthma, heart or lung conditions) should limit prolonged outdoor exertion.';
+      case '#ff0000':
+        return 'Everyone should limit prolonged outdoor exertion. Sensitive groups should avoid outdoor activity.';
+      case '#800080':
+        return 'Health alert: everyone should avoid prolonged outdoor exertion. Sensitive groups should stay indoors.';
+      case '#7e0023':
+        return 'Health emergency: everyone should avoid all outdoor physical activity.';
+      default:
+        return 'No recommendation available for this reading.';
+    }
   };
 
   // Sleek, pill-style badge for the Quezon City LGU portal marker
@@ -351,7 +371,7 @@ export default function App() {
                 click: () => {
                   setActiveStation({ ...station, waqiTime: "Fetching..." });
                   if (station.uid) {
-                    axios.get(`http://localhost:5000/api/station/${station.uid}`)
+                    axios.get(`${API_URL}/api/station/${station.uid}`)
                       .then(res => {
                         const timeObj = res.data?.time;
                         const sensorTime = timeObj?.iso || (timeObj?.s ? timeObj.s.replace(' ', 'T') : null);
@@ -457,4 +477,3 @@ export default function App() {
     </div>
   );
 }
-
