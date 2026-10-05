@@ -25,6 +25,15 @@ export default function App() {
   const [isVulnerable, setIsVulnerable] = useState(false);
   const [userLoc, setUserLoc] = useState(null);
 
+  // Respiratory condition checkboxes (replaces the old single asthma yes/no)
+  const [conditions, setConditions] = useState({
+    asthma: false,
+    copd: false,
+    bronchitis: false,
+    allergicRhinitis: false,
+    other: false
+  });
+
   // --- NEW: Tracks if the user is on a mobile screen ---
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
@@ -180,11 +189,26 @@ export default function App() {
     }
   };
 
-  const handleHealthResponse = (isAsthmatic) => {
-    if (isAsthmatic && Notification.permission !== "granted") {
+  // Toggles a single checkbox in the respiratory conditions form
+  const toggleCondition = (key) => {
+    setConditions(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  // Reads all checked conditions, marks the user vulnerable if any are checked,
+  // requests notification permission if needed, and closes the onboarding modal.
+  const handleHealthSubmit = () => {
+    const hasAnyCondition = Object.values(conditions).some(Boolean);
+    if (hasAnyCondition && Notification.permission !== "granted") {
       Notification.requestPermission();
     }
-    setIsVulnerable(isAsthmatic);
+    setIsVulnerable(hasAnyCondition);
+    setShowOnboarding(false);
+  };
+
+  // Shortcut for the "I don't have any respiratory conditions" link
+  const handleNoConditions = () => {
+    setConditions({ asthma: false, copd: false, bronchitis: false, allergicRhinitis: false, other: false });
+    setIsVulnerable(false);
     setShowOnboarding(false);
   };
 
@@ -256,6 +280,14 @@ export default function App() {
     iconAnchor: [57, 16]
   });
 
+  const conditionOptions = [
+    { key: 'asthma', label: 'Asthma' },
+    { key: 'copd', label: 'COPD (Chronic Obstructive Pulmonary Disease)' },
+    { key: 'bronchitis', label: 'Chronic Bronchitis' },
+    { key: 'allergicRhinitis', label: 'Allergic Rhinitis' },
+    { key: 'other', label: 'Other respiratory condition' }
+  ];
+
   return (
     <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
       
@@ -273,25 +305,43 @@ export default function App() {
             boxSizing: 'border-box'
           }}>
             <h2 style={{ margin: '0 0 15px 0', color: '#0f172a', fontSize: isMobile ? '1.5rem' : '1.8rem' }}>Welcome to MetroAir</h2>
-            <p style={{ fontSize: isMobile ? '0.95rem' : '1.05rem', color: '#475569', lineHeight: '1.6', margin: '0 0 30px 0' }}>
-              To personalize your experience, please let us know: Do you currently have a respiratory condition such as asthma?
+            <p style={{ fontSize: isMobile ? '0.95rem' : '1.05rem', color: '#475569', lineHeight: '1.6', margin: '0 0 20px 0' }}>
+              To personalize your experience, please check any respiratory conditions that apply to you:
             </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexDirection: isMobile ? 'column' : 'row' }}>
-              <button 
-                onClick={() => handleHealthResponse(true)}
-                style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', flex: 1 }}
-              >
-                Yes, I do
-              </button>
-              <button 
-                onClick={() => handleHealthResponse(false)}
-                style={{ background: '#e2e8f0', color: '#475569', border: 'none', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', flex: 1 }}
-              >
-                No, I don't
-              </button>
+
+            <div style={{ textAlign: 'left', marginBottom: '25px' }}>
+              {conditionOptions.map(item => (
+                <label
+                  key={item.key}
+                  style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', cursor: 'pointer', fontSize: isMobile ? '0.9rem' : '0.95rem', color: '#334155' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={conditions[item.key]}
+                    onChange={() => toggleCondition(item.key)}
+                    style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#3b82f6' }}
+                  />
+                  {item.label}
+                </label>
+              ))}
             </div>
+
+            <button
+              onClick={handleHealthSubmit}
+              style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', width: '100%' }}
+            >
+              Continue
+            </button>
+
+            <button
+              onClick={handleNoConditions}
+              style={{ background: 'transparent', color: '#94a3b8', border: 'none', padding: '8px', cursor: 'pointer', fontSize: '0.85rem', width: '100%', marginTop: '8px', textDecoration: 'underline' }}
+            >
+              I don't have any respiratory conditions
+            </button>
+
             <small style={{ display: 'block', marginTop: '20px', color: '#94a3b8', fontSize: '0.75rem' }}>
-              If yes, we will request location permissions to alert you when entering unhealthy air zones.
+              If you check any condition, we will request location permissions to alert you when entering unhealthy air zones.
             </small>
           </div>
         </div>
