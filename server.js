@@ -139,8 +139,29 @@ async function logAqiSnapshot() {
   }
 }
 
-// Runs every 30 minutes, independent of whether anyone is on the site
-cron.schedule('*/30 * * * *', logAqiSnapshot);
+// Keeps track of when we last wrote to the log, so we can catch up even if
+// Render's free tier put the server to sleep and the exact :00/:30 mark was missed.
+let lastLoggedAt = 0;
+const LOG_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+async function logIfDue() {
+  const now = Date.now();
+  if (now - lastLoggedAt >= LOG_INTERVAL_MS) {
+    lastLoggedAt = now;
+    await logAqiSnapshot();
+  }
+}
+
+// Still runs on the normal schedule while the server is awake...
+cron.schedule('*/30 * * * *', logIfDue);
+
+// ...but ALSO checks on every live map request, so a visit after the server
+// wakes from sleep immediately catches up on a missed cycle instead of
+// waiting for the next exact :00/:30 mark.
+app.use((req, res, next) => {
+  if (req.path === '/api/map-aqi') logIfDue();
+  next();
+});
 
 // 1. STANDARD ENDPOINT: Fetches live map data within Metro Manila bounds
 app.get('/api/map-aqi', async (req, res) => {
