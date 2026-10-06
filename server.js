@@ -119,7 +119,9 @@ async function logAqiSnapshot() {
     const mapData = await fetchStations();
 
     if (mapData.length > 0) {
+      const snapshotAt = new Date(); // same timestamp for every row in this snapshot
       const logs = mapData.map(s => ({
+        loggedAt: snapshotAt,
         uid: s.uid,
         station: s.name,
         aqi: s.aqi,
@@ -227,11 +229,7 @@ app.get('/api/station/:uid', async (req, res) => {
 // 5. HISTORY ENDPOINT (JSON): Returns logged readings for a given day
 app.get('/api/history', async (req, res) => {
   try {
-    const date = req.query.date ? new Date(req.query.date) : new Date();
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+    const { start, end } = phDayRange(req.query.date);
 
     const filter = { loggedAt: { $gte: start, $lte: end } };
     if (req.query.station) filter.station = req.query.station;
@@ -244,10 +242,36 @@ app.get('/api/history', async (req, res) => {
   }
 });
 
+// ---- Philippine time helpers (Asia/Manila = UTC+8, no DST) ----
+const PH_TZ = 'Asia/Manila';
+
+// YYYY-MM-DD for a Date, as seen in the Philippines
+function phDateStr(date) {
+  return date.toLocaleDateString('en-CA', { timeZone: PH_TZ });
+}
+
+// Start/end of a Philippine calendar day, as real UTC instants
+function phDayRange(dateParam) {
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : phDateStr(new Date());
+  return {
+    dateStr,
+    start: new Date(`${dateStr}T00:00:00.000+08:00`),
+    end: new Date(`${dateStr}T23:59:59.999+08:00`)
+  };
+}
+
+function phTime(date) {
+  return new Date(date).toLocaleTimeString('en-PH', { timeZone: PH_TZ, hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
+function phHour(date) {
+  return Number(new Date(date).toLocaleString('en-US', { timeZone: PH_TZ, hour: 'numeric', hourCycle: 'h23' }));
+}
+
 // Groups a timestamp into Morning (5am-12pm), Afternoon (12pm-6pm), or Evening
 // (6pm-5am, wrapping overnight readings into Evening too).
 function getPeriod(date) {
-  const h = date.getHours();
+  const h = phHour(date);
   if (h >= 5 && h < 12) return 'Morning';
   if (h >= 12 && h < 18) return 'Afternoon';
   return 'Evening';
@@ -260,19 +284,13 @@ function getPeriod(date) {
 //   https://metroair.onrender.com/dashboard?date=2026-10-05&station=Ortigas
 app.get(['/dashboard', '/history'], async (req, res) => {
   try {
-    const dateParam = req.query.date;
-    const date = dateParam ? new Date(dateParam) : new Date();
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+    const { dateStr, start, end } = phDayRange(req.query.date);
 
     const filter = { loggedAt: { $gte: start, $lte: end } };
     if (req.query.station) filter.station = req.query.station;
 
     const logs = await AqiLog.find(filter).sort({ loggedAt: 1 });
 
-    const dateStr = start.toISOString().slice(0, 10);
     const stationList = await AqiLog.distinct('station');
     stationList.sort();
 
@@ -309,7 +327,7 @@ app.get(['/dashboard', '/history'], async (req, res) => {
     const snapshotPoints = Object.entries(bySnapshot)
       .sort((a, b) => new Date(a[0]) - new Date(b[0]))
       .map(([t, v]) => ({
-        label: new Date(t).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        label: phTime(t),
         avg: +(v.sum / v.count).toFixed(1)
       }));
 
@@ -324,7 +342,7 @@ app.get(['/dashboard', '/history'], async (req, res) => {
     }[status] || '#808080');
 
     const rows = [...logs].reverse().map(log => {
-      const time = new Date(log.loggedAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', hour12: true });
+      const time = phTime(log.loggedAt);
       const color = statusColor(log.status);
       const textColor = (color === '#cccc00') ? '#111' : '#fff';
       return `
@@ -384,7 +402,7 @@ app.get(['/dashboard', '/history'], async (req, res) => {
       <body>
         <div class="wrap">
           <h1>MetroAir Dashboard</h1>
-          <div class="sub">Logged automatically every 30 minutes &middot; alerts fire only when a station's AQI category changes</div>
+          <div class="sub">Logged automatically every 30 minutes &middot; all times in Philippine Time (PHT) &middot; alerts fire only when a station's AQI category changes</div>
 
           <form method="GET" action="/dashboard">
             <label>Date
